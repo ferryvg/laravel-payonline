@@ -2,31 +2,45 @@
 
 namespace Laravel\Payonline;
 
-use App;
+use Event;
 use Exception;
 use InvalidArgumentException;
 use Illuminate\Support\Collection;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Redirect;
-use Request;
-//use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\Request;
+use Illuminate\Database\Eloquent\Model;
+
+use Laravel\Payonline\Events\PaymentWasPaid;
 
 use GuzzleHttp\Client as HttpClient;
 
-trait Payment {
+class Payment extends Model {
+
+	public static function pay($orderId, $amount, $descr='') {
+		$data = [
+			'order_id'		=>	$orderId,
+			'amount'		=>	(float)$amount
+		];
+		if($descr) $data['descr'] = $descr;
+
+		$payment = new Payment;
+		$payment->fill($data);
+		return $payment;
+	}
+
+
 
 	protected $table = 'payments';
 	protected $fillable = ['order_id', 'amount', 'descr', 'paid_at', 'transaction_id', 'provider', 'card_holder', 'card_number', 'ip', 'extra', 'error', 'checked_at'];
 
 	protected static $payEndpoint;
-	protected static $merchantId;
-	protected static $securityKey;
 
-	public function getPayUrl() {
+	public function getPayUrl($data=[]) {
 		$params = [
 			'MerchantId'	=>	$this->getMerchantId(),
-			'OrderId'		=>	$this->id,
-			'Amount'		=>	$this->amount,
+			'OrderId'		=>	NULL,
+			'Amount'		=>	number_format((float)$this->amount, 2),
 			'Currency'		=>	$this->preferredCurrency(),
 		];
 
@@ -41,12 +55,15 @@ trait Payment {
 
 		// order description
 		if(trim($this->descr)) {
-			$params['OrderDescription'] = str_limit(e(trim($this->descr)), 100, '');
+			$params['OrderDescription'] = str_limit(trim($this->descr), 100, '');
 		}
 		$params['PrivateSecurityKey'] = $this->getSecurityKey();
 
+		$this->save();
+		$params['OrderId'] = $this->getKey();
+
 		// make security key
-		$params_str = http_build_query($params);
+		$params_str = urldecode(http_build_query($params));
 		$securityKey = md5($params_str);
 		
 
@@ -58,8 +75,6 @@ trait Payment {
 			$params['FailUrl'] = rawurlencode($data['failUrl']);
 		}
 		$params['SecurityKey'] = $securityKey;
-
-		$this->save();
 
 		return static::getPayEndpoint().'?'.http_build_query($params);
 	}
@@ -76,7 +91,7 @@ trait Payment {
 			$result = FALSE;
 		}
 
-		if(!isset($checkParams['Amount']) || $checkParams['Amount'] != $this->amount) {
+		if(!isset($checkParams['Amount']) || (float)$checkParams['Amount'] != (float)$this->amount) {
 			//throw new InvalidArgumentException('Invalid "Amount" value', 1);
 			$result = FALSE;
 		}
@@ -86,7 +101,7 @@ trait Payment {
 			$result = FALSE;
 		}
 
-		$securityKey = md5(http_build_query($checkParams));
+		$securityKey = md5(urldecode(http_build_query($checkParams)));
 
 		if($securityKey !== $inSecretKey) {
 			//throw new InvalidArgumentException('Invalid "secretKey" value', 1);
@@ -95,25 +110,36 @@ trait Payment {
 
 		// save data
 		if($result) {
-			$this->fill([
-				'extra'				=>	json_encode($request),
-				'payed_at'			=>	date('Y-m-d H:i:s', strtotime($request->input('DateTime'))),
-				'transaction_id'	=>	$request->input('TransactionID'),
-				'provider'			=>	$request->input('Provider'),
-				'card_holder'		=>	$request->input('CardHolder'),
-				'card_number'		=>	$request->input('CardNumber'),
-				'ip'				=>	$request->input('IpAddress'),
-			]);
-			$this->save();
+			if(!$this->isPayed()) {
+				//$result = $this->checkStatus();
+				if($result) {
+					$this->fill([
+						'extra'				=>	json_encode($request->all()),
+						'paid_at'			=>	date('Y-m-d H:i:s'),
+						'transaction_id'	=>	$request->input('TransactionID'),
+						'provider'			=>	$request->input('Provider'),
+						'card_holder'		=>	$request->input('CardHolder'),
+						'card_number'		=>	$request->input('CardNumber'),
+						'ip'				=>	$request->input('IpAddress'),
+					]);
+					//$this->save();
+
+					$event_result = event(new PaymentWasPaid($this));
+				}
+			}
 		}
 
 		return $result;
 	}
 
+	public function isPayed() {
+		return $this->paid_at;
+	}
+
 	public function checkStatus() {
 		$params = [
 			'MerchantId'			=>	$this->getMerchantId(),
-			'OrderId'				=>	$this->id,
+			'OrderId'				=>	$this->getKey(),
 			'PrivateSecurityKey'	=>	$this->getSecurityKey(),
 		];
 
@@ -123,10 +149,20 @@ trait Payment {
 		$params['SecurityKey'] = $securityKey;
 
 		$client = new HttpClient();
-		$response = $client->request('GET', static::getPayEndpoint('search'), $params);
+		print('<pre>'.print_r($params,1).'</pre>');
+		$response = $client->request('GET', static::getPayEndpoint('search').'?'.http_build_query($params));
 
-		print('<pre>'.print_r($response->getStatusCode(),1).'</pre>');
-		dd($response->getBody());
+		$result = FALSE;
+		if($response->getStatusCode() == 200) {
+			$result = $response->getBody()->getContents();
+			if(empty($result)) $result = FALSE;
+			else {
+				$str = $result;
+				parse_str($str, $result);
+			}
+		}
+
+		return $result;
 	}
 
 
@@ -149,18 +185,12 @@ trait Payment {
 
 	// merchantId
 	public static function getMerchantId() {
-		return static::$merchantId ?: getenv('PAYONLINE_MERCHANT_ID');
-	}
-	public static function setMerchantId($id) {
-		static::$merchantId = $id;
+		return config('payonline.merchantId');
 	}
 
 	// securityKey
 	public static function getSecurityKey() {
-		return static::$securityKey ?: getenv('PAYONLINE_SECRET');
-	}
-	public static function setSecurityKey($id) {
-		static::$securityKey = $id;
+		return config('payonline.secretKey');
 	}
 
 

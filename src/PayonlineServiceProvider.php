@@ -12,11 +12,20 @@ class PayonlineServiceProvider extends ServiceProvider {
 	 * @return void
 	 */
 	public function boot() {
-		$this->loadViewsFrom(__DIR__.'/../resources/views', 'payonline');
+		$this->bootConfig();
+	}
 
-		$this->publishes([
-			__DIR__.'/../resources/views' => base_path('resources/views/vendor/payonline'),
-		]);
+	/**
+	 * Booting configure.
+	 */
+	protected function bootConfig() {
+		$path = __DIR__.'/config/payonline.php';
+
+		$this->mergeConfigFrom($path, 'payonline');
+
+		if (function_exists('config_path')) {
+			$this->publishes([$path => config_path('payonline.php')]);
+		}
 	}
 
 	/**
