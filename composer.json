@@ -1,0 +1,21 @@
+{
+    "name": "ferryvg/laravel-payonline",
+    "description": "Payonline Billing for Laravel",
+    "keywords": ["laravel", "billing", "payonline", "laravel5"],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "ferryvg",
+            "email": "ferry.very@gmail.com"
+        }
+    ],
+    "require": {
+        "php": ">=5.4.0",
+        "illuminate/support": "5.0.*|5.1.*"
+    },
+    "autoload": {
+        "psr-4": {
+            "Laravel\\Payonline\\": "src/"
+        }
+    }
+}
