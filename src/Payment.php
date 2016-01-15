@@ -17,7 +17,7 @@ use GuzzleHttp\Client as HttpClient;
 
 class Payment extends Model {
 
-	public static function pay($orderId, $amount, $descr='') {
+	public static function pay($orderId, $amount, $descr='', $extra=[]) {
 		$data = [
 			'order_id'		=>	$orderId,
 			'amount'		=>	(float)$amount
@@ -36,21 +36,21 @@ class Payment extends Model {
 
 	protected static $payEndpoint;
 
-	public function getPayUrl($data=[]) {
+	public function getPayUrl($extra=[]) {
 		$params = [
 			'MerchantId'	=>	$this->getMerchantId(),
 			'OrderId'		=>	NULL,
-			'Amount'		=>	number_format((float)$this->amount, 2),
+			'Amount'		=>	number_format((float)$this->amount, 2, '.', ''),
 			'Currency'		=>	$this->preferredCurrency(),
 		];
 
 		// valid until
-		if(isset($data['validUntil']) && $data['validUntil']) {
-			if(strtotime($data['validUntil']) < time()) {
-				throw new InvalidArgumentException('Invalid "validUntil" value: '.$data['validUntil'], 1);
+		if(isset($extra['validUntil']) && $extra['validUntil']) {
+			if(strtotime($extra['validUntil']) < time()) {
+				throw new InvalidArgumentException('Invalid "validUntil" value: '.$extra['validUntil'], 1);
 			}
 
-			$params['ValidUntil'] = date('Y-m-d H:i:s', strtotime($data['validUntil']));
+			$params['ValidUntil'] = date('Y-m-d H:i:s', strtotime($extra['validUntil']));
 		}
 
 		// order description
@@ -68,12 +68,23 @@ class Payment extends Model {
 		
 
 		// extra params
-		if(isset($data['returnUrl']) && $data['returnUrl']) {
-			$params['ReturnUrl'] = rawurlencode($data['returnUrl']);
+		if(isset($extra['returnUrl']) && $extra['returnUrl']) {
+			$params['ReturnUrl'] = $extra['returnUrl'];
 		}
-		if(isset($data['failUrl']) && $data['failUrl']) {
-			$params['FailUrl'] = rawurlencode($data['failUrl']);
+		if(isset($extra['failUrl']) && $extra['failUrl']) {
+			$params['FailUrl'] = $extra['failUrl'];
 		}
+
+		// additional params
+		if(isset($extra['extra'])) {
+			foreach($extra['extra'] as $ek => $ev) {
+				$ev = e(trim($ev));
+				if(!isset($params[$ek]) && $ev) {
+					$params[$ek] = $ev;
+				}
+			}
+		}
+
 		$params['SecurityKey'] = $securityKey;
 
 		return static::getPayEndpoint().'?'.http_build_query($params);
@@ -122,7 +133,7 @@ class Payment extends Model {
 						'card_number'		=>	$request->input('CardNumber'),
 						'ip'				=>	$request->input('IpAddress'),
 					]);
-					//$this->save();
+					$this->save();
 
 					$event_result = event(new PaymentWasPaid($this));
 				}
@@ -197,7 +208,7 @@ class Payment extends Model {
 
 
 	public function getDates() {
-		return ['created_at', 'updated_at', 'payed_at', 'checked_at'];
+		return ['created_at', 'updated_at', 'paid_at', 'checked_at'];
 	}
 }
 
